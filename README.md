@@ -555,18 +555,4 @@ To contribute:
 
 ---
 
-## License
 
-This project is intended for experimental and educational purposes.
-
-Add an appropriate open-source license to the repository before distributing the project.
-
----
-
-## Author
-
-**MyChatbot**
-
-An experimental AI chatbot demonstrating the integration of LLMs, agentic workflows, external tools, and persistent memory.
-
-Built with Python, LangChain, LangGraph, FastAPI, and MCP.

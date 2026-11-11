@@ -1,0 +1,31 @@
+
+# API and environment
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic
+requests
+
+# LangChain and LangGraph
+langchain
+langchain-core
+langchain-community
+langchain-groq
+langgraph
+langgraph-checkpoint-sqlite
+langgraph-store-postgres
+langchain-mcp-adapters
+
+# MCP SDK (keep below version 2)
+mcp>=1.24,<2
+
+# Database and persistence
+psycopg[binary]
+aiosqlite
+
+# Vector database and embeddings
+chromadb
+sentence-transformers
+
+# Web search
+tavily-python

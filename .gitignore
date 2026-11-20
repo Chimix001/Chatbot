@@ -17,10 +17,3 @@ __pycache__/
 # Database files
 *.sqlite
 *.db
-
-
-
-
-
-# Chroma / vector database
-chroma_db/

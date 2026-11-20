@@ -44,8 +44,8 @@ The application uses LangGraph to manage the conversation lifecycle, MCP to expo
 - **MCP integration:** Exposes external capabilities through the Model Context Protocol over Streamable HTTP.
 - **Web search:** Retrieves recent information using Tavily Search.
 - **Mathematical operations:** Supports addition, subtraction, multiplication, and division.
-- **File and URL reading:** Retrieves content from local files and web URLs.
-- **Long-term memory:** Stores user-specific information using PostgreSQL and ChromaDB.
+- **File and URL reading:** Retrieves content from allowlisted local directories and hosts.
+- **Long-term memory:** Stores user-specific text, metadata and embeddings in PostgreSQL.
 - **Short-term memory:** Maintains conversation history using SQLite checkpoints.
 - **Graph-based orchestration:** Uses LangGraph to coordinate memory retrieval, LLM execution, tool calling, and memory persistence.
 - **REST API:** Provides an HTTP interface through FastAPI.
@@ -64,8 +64,7 @@ The application uses LangGraph to manage the conversation lifecycle, MCP to expo
 | FastAPI | REST API development |
 | MCP | External tool integration |
 | Tavily | Web search |
-| PostgreSQL | Persistent user memory storage |
-| ChromaDB | Vector storage and semantic retrieval |
+| PostgreSQL | Persistent user memory and embedding storage |
 | Sentence Transformers | Text embeddings |
 | SQLite | Conversation checkpoint persistence |
 | Pydantic | Data validation |
@@ -90,8 +89,7 @@ flowchart TD
         E --> F{"Tool Calls?"}
         F -->|Yes| G["MCP Tool Node"]
         G --> E
-        F -->|No| H["Token Counter"]
-        H --> I["Save Memory"]
+        F -->|No| I["Save Memory"]
     end
 
     I --> J["Response to User"]
@@ -106,8 +104,8 @@ flowchart TD
     L --> P["URL Reader"]
     L --> Q["Date and Time"]
 
-    D <-->|Semantic Retrieval| R["ChromaDB"]
-    I <-->|Persistent Storage| S["PostgreSQL"]
+    D <-->|Semantic Retrieval| S["PostgreSQL"]
+    I <-->|Persistent Storage| S
 
     C <-->|Checkpoints| T["SQLite"]
 ```
@@ -132,7 +130,7 @@ Exposes external capabilities as standardized tools that the chatbot can discove
 
 **5. Memory Layer**
 
-Combines PostgreSQL, ChromaDB, and SQLite to support persistent user information and conversation continuity.
+Combines PostgreSQL (memories and embeddings) and SQLite (checkpoints) to support persistent user information and conversation continuity.
 
 ---
 
@@ -145,18 +143,19 @@ MyChatbot/
 ├── Mychatbot.py             # LangGraph workflow and LLM integration
 ├── memory.py                # Memory management and retrieval nodes
 ├── Mcp.py                   # MCP server and tool definitions
+├── tests/                   # Pytest suite
 │
 ├── .env                     # API keys and environment variables
 ├── .env.example             # Environment variable template
 ├── .gitignore               # Files excluded from Git
-├── requirements.txt         # Project dependencies
+├── pyproject.toml           # Project metadata and dependencies
+├── uv.lock                  # Locked dependency versions
 ├── README.md                # Project documentation
 │
-├── checkpoints.sqlite       # SQLite conversation checkpoints
-└── chroma_db/               # ChromaDB vector storage
+└── checkpoints.sqlite       # SQLite conversation checkpoints
 ```
 
-> **Note:** `checkpoints.sqlite` and `chroma_db/` are generated at runtime and should not be committed to Git.
+> **Note:** `checkpoints.sqlite` is generated at runtime and should not be committed to Git.
 
 > **Important:** Avoid naming your MCP server file `mcp.py`, as this can shadow the installed `mcp` Python SDK and cause import errors.
 
@@ -172,7 +171,7 @@ The chatbot follows a graph-based execution workflow.
 4. **Tool Decision:** The LLM determines whether the request requires an external tool.
 5. **Tool Execution:** If necessary, LangGraph routes the request to the MCP ToolNode.
 6. **Response Generation:** The tool results are returned to the LLM for further processing.
-7. **Token Counting:** The application calculates a basic token estimate for the conversation.
+7. **Token Counting:** Tokens are accumulated from the LLM's `usage_metadata`.
 8. **Memory Persistence:** Relevant information is passed to the memory-saving component.
 9. **Response Delivery:** The final response is returned to the user.
 
@@ -190,11 +189,11 @@ Long-term memory allows the chatbot to retain relevant user information across s
 
 It uses:
 
-- **PostgreSQL:** Persistent storage for user memory records.
-- **ChromaDB:** Vector indexing for semantic similarity search.
+- **PostgreSQL:** Single source of truth for memory text, metadata and embeddings.
 - **Sentence Transformers:** Generates text embeddings for semantic retrieval.
+- **Cosine similarity:** Scores stored embeddings against the query in application code.
 
-Memory is associated with a `user_id`, allowing information to be retrieved across different conversation threads belonging to the same user.
+Memory is associated with a `user_id`, allowing information to be retrieved across different conversation threads belonging to the same user. Retrieval ignores scores below `MEMORY_MIN_SCORE` and considers at most `MEMORY_SEARCH_LIMIT` recent records.
 
 ### 2. Short-Term Memory
 
@@ -211,7 +210,7 @@ It uses:
 | Feature | Long-Term Memory | Short-Term Memory |
 |---|---|---|
 | Purpose | Retain user information | Maintain conversation context |
-| Storage | PostgreSQL + ChromaDB | SQLite |
+| Storage | PostgreSQL (+ embeddings) | SQLite |
 | Identifier | `user_id` | `thread_id` |
 | Retrieval | Semantic similarity | Conversation checkpoints |
 | Persistence | Across conversations | Across sessions in the same thread |
@@ -257,21 +256,22 @@ git clone <your-repository-url>
 cd MyChatbot
 ```
 
-### 2. Create a Virtual Environment
+### 2. Install uv
 
-**Windows PowerShell:**
-
-```powershell
-python -m venv .venv
-
-.venv\Scripts\Activate.ps1
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
+
+See the [uv installation docs](https://docs.astral.sh/uv/getting-started/installation/) for Windows and other options.
 
 ### 3. Install Dependencies
 
 ```bash
-python -m pip install -r requirements.txt
+uv sync
 ```
+
+`uv sync` creates `.venv` and installs the locked dependencies, including the `dev` test group. Use `uv sync --frozen` in CI to fail if `uv.lock` is out of date.
 
 ### 4. Configure Environment Variables
 
@@ -294,12 +294,27 @@ GROQ_API_KEY=your_groq_api_key
 # Tavily
 TAVILY_API_KEY=your_tavily_api_key
 
-# PostgreSQL
-DB_URL=postgresql://username:password@localhost:5432/mychatbot
+# PostgreSQL (required)
+DATABASE_URL=postgresql://username:password@localhost:5432/mychatbot
+
+# Conversation checkpoints and vector storage
+CHECKPOINT_DB=checkpoints.sqlite
+MEMORY_MIN_SCORE=0.3
+MEMORY_SEARCH_LIMIT=200
+EMBEDDING_MODEL=all-MiniLM-L6-v2
 
 # MCP Server
 MCP_SERVER_URL=http://localhost:8000/mcp
+MCP_PORT=8000
+MCP_ALLOWED_DIR=          # read_file disabled until set to an absolute directory
+MCP_ALLOWED_HOSTS=        # comma-separated hosts; read_url disabled until set
+
+# API authentication (JSON mapping of bearer token to user ID)
+AUTH_TOKENS={"local-token":"local-user"}
 ```
+
+`/ask` requires a bearer token from `AUTH_TOKENS`; the `user_id` is derived from it,
+and conversation threads are namespaced per user.
 
 Replace the placeholder values with your actual credentials and connection details.
 
@@ -313,8 +328,8 @@ The MCP server and chatbot application should run in separate terminals.
 
 ### 1. Start the MCP Server
 
-```powershell
-python my_mcp_server.py
+```bash
+uv run python Mcp.py
 ```
 
 The MCP server should be available at:
@@ -327,8 +342,8 @@ http://localhost:8000/mcp
 
 Open another terminal:
 
-```powershell
-python Mychatbot.py
+```bash
+uv run python Mychatbot.py
 ```
 
 You can now interact with the chatbot directly through the terminal.
@@ -343,8 +358,8 @@ exit
 
 To expose the chatbot through the REST API:
 
-```powershell
-uvicorn main:app --reload
+```bash
+uv run uvicorn main:app --reload
 ```
 
 The API will be available at:
@@ -360,6 +375,12 @@ http://localhost:8000/docs
 ```
 
 > **Note:** If the MCP server and FastAPI application run simultaneously on the same machine, configure them to use different ports. For example, keep the MCP server on port `8000` and run FastAPI on port `8001`.
+
+### 4. Run the Tests
+
+```bash
+uv run pytest -q
+```
 
 ---
 
@@ -379,14 +400,14 @@ MyChatbot exposes a REST API through FastAPI.
 ```http
 POST /ask
 Content-Type: application/json
+Authorization: Bearer local-token
 ```
 
-Example JSON payload (adapt the fields to the request model defined in `main.py`):
+Example JSON payload (`user_id` comes from the token, not the body):
 
 ```json
 {
-    "message": "What is artificial intelligence?",
-    "user_id": "user_123",
+    "question": "What is artificial intelligence?",
     "thread_id": "conversation_001"
 }
 ```
